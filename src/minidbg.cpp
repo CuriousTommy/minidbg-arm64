@@ -29,10 +29,18 @@ public:
         return get_register_value_from_dwarf_register(m_pid, regnum);
     }
 
-    dwarf::taddr pc() override {
+    dwarf::taddr pc() {
         struct user_regs_struct regs;
-        ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
+        struct iovec reg_iov = {
+            .iov_base = &regs,
+            .iov_len = sizeof(regs)
+        };
+        ptrace(PTRACE_GETREGSET, m_pid, NT_PRSTATUS, &reg_iov);
+#if __i386__ || __x86_64__
         return regs.rip - m_load_address;
+#elif __aarch64__
+        return regs.pc - m_load_address;
+#endif
     }
 
     dwarf::taddr deref_size (dwarf::taddr address, unsigned size) override {
@@ -96,7 +104,11 @@ void debugger::print_backtrace() {
     auto current_func = get_function_from_pc(offset_load_address(get_pc()));
     output_frame(current_func);
 
+#if __i386__ || __x86_64__
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
+#elif __aarch64__
+    auto frame_pointer = get_register_value(m_pid, reg::r29);
+#endif
     auto return_address = read_memory(frame_pointer+8);
 
     while (dwarf::at_name(current_func) != "main") {
@@ -166,7 +178,11 @@ void debugger::remove_breakpoint(std::intptr_t addr) {
 }
 
 void debugger::step_out() {
+#if __i386__ || __x86_64__
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
+#elif __aarch64__
+    auto frame_pointer = get_register_value(m_pid, reg::r29);
+#endif
     auto return_address = read_memory(frame_pointer+8);
 
     bool should_remove_breakpoint = false;
@@ -212,7 +228,11 @@ void debugger::step_over() {
         ++line;
     }
 
+#if __i386__ || __x86_64__
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
+#elif __aarch64__
+    auto frame_pointer = get_register_value(m_pid, reg::r29);
+#endif
     auto return_address = read_memory(frame_pointer+8);
     if (!m_breakpoints.count(return_address)) {
         set_breakpoint_at_address(return_address);
@@ -250,7 +270,11 @@ void debugger::write_memory(uint64_t address, uint64_t value) {
 }
 
 uint64_t debugger::get_pc() {
+#if __i386__ || __x86_64__
     return get_register_value(m_pid, reg::rip);
+#elif __aarch64__
+    return get_register_value(m_pid, reg::pc);
+#endif
 }
 
 uint64_t debugger::get_offset_pc() {
@@ -258,7 +282,11 @@ uint64_t debugger::get_offset_pc() {
 }
 
 void debugger::set_pc(uint64_t pc) {
+#if __i386__ || __x86_64__
     set_register_value(m_pid, reg::rip, pc);
+#elif __aarch64__
+    set_register_value(m_pid, reg::pc, pc);
+#endif
 }
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
@@ -581,7 +609,7 @@ void execute_debugee (const std::string& prog_name) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Program name not specified";
+        std::cerr << "Program name not specified\n";
         return -1;
     }
 
